@@ -189,6 +189,15 @@ impl Ed25519Signer {
     ///
     /// # Arguments
     /// * `identifier` - Human-readable identifier for the mediator
+    ///
+    /// # Example
+    /// ```
+    /// use canton_sequencer_client::signing::Ed25519Signer;
+    ///
+    /// let signer = Ed25519Signer::generate();
+    /// let mediator_id = signer.mediator_id("mymediator").unwrap();
+    /// println!("Mediator: {}", mediator_id);
+    /// ```
     pub fn mediator_id(&self, identifier: impl Into<String>) -> Result<crate::member::MediatorId, crate::member::MemberError> {
         crate::member::MediatorId::create(identifier, self.fingerprint())
     }
@@ -197,6 +206,15 @@ impl Ed25519Signer {
     ///
     /// # Arguments
     /// * `identifier` - Human-readable identifier for the sequencer
+    ///
+    /// # Example
+    /// ```
+    /// use canton_sequencer_client::signing::Ed25519Signer;
+    ///
+    /// let signer = Ed25519Signer::generate();
+    /// let sequencer_id = signer.sequencer_id("mysequencer").unwrap();
+    /// println!("Sequencer: {}", sequencer_id);
+    /// ```
     pub fn sequencer_id(&self, identifier: impl Into<String>) -> Result<crate::member::SequencerId, crate::member::MemberError> {
         crate::member::SequencerId::create(identifier, self.fingerprint())
     }

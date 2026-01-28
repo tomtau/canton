@@ -44,7 +44,9 @@ pub const DELIMITER: &str = "::";
 /// Maximum length for the identifier part.
 pub const MAX_IDENTIFIER_LENGTH: usize = 185;
 
-/// Maximum length for the full Member ID string.
+/// Maximum length for the full Member ID string (CODE + :: + id + :: + fingerprint).
+/// This is used by Canton for string length limits (String300).
+#[allow(dead_code)]
 pub const MAX_MEMBER_LENGTH: usize = 300;
 
 /// Error type for member ID operations.
@@ -457,9 +459,9 @@ impl fmt::Display for SequencerId {
 /// Expected format: `CODE::identifier::fingerprint`
 fn parse_member_string(s: &str) -> Result<(MemberCode, UniqueIdentifier), MemberError> {
     // Format: CODE::identifier::fingerprint
-    // We need at least CODE + :: + identifier + :: + fingerprint
+    // Minimum: CODE (3) + :: (2) + id (1) + :: (2) + fingerprint (1) = 9 chars
     
-    if s.len() < 3 + DELIMITER.len() * 2 + 1 {
+    if s.len() < 3 + DELIMITER.len() * 2 + 2 {
         return Err(MemberError::ParseError(format!(
             "invalid member '{}': too short",
             s
