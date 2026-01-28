@@ -11,25 +11,26 @@
 //! - **Member ID Generation**: Create participant, mediator, or sequencer IDs from signing keys
 //! - **Ed25519 Signing**: Sign challenge nonces for authentication
 //! - **gRPC Client**: Connect and authenticate with Canton sequencers
+//! - **Protocol Versions**: Constants for supported Canton protocol versions
 //!
 //! # Example
 //!
 //! ```ignore
-//! use canton_sequencer_client::{SequencerAuthClient, signing::Ed25519Signer, member::ParticipantId};
+//! use canton_sequencer_client::{SequencerAuthClient, signing::Ed25519Signer, member::ParticipantId, Member};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Generate a signing key and create a participant ID
 //!     let signer = Ed25519Signer::generate();
-//!     let participant_id = ParticipantId::create("myparticipant", signer.fingerprint())?;
+//!     let participant_id = signer.participant_id("myparticipant")?;
 //!
 //!     // Connect to the sequencer
 //!     let mut client = SequencerAuthClient::connect("http://localhost:5001").await?;
 //!
-//!     // Authenticate using challenge-response
-//!     let challenge = client.challenge(participant_id.to_proto_primitive(), vec![30]).await?;
+//!     // Authenticate using challenge-response (uses latest stable protocol version by default)
+//!     let challenge = client.challenge(&participant_id).await?;
 //!     let signature = signer.sign_nonce(&challenge.nonce);
-//!     let token = client.authenticate(participant_id.to_proto_primitive(), signature, challenge.nonce).await?;
+//!     let token = client.authenticate(&participant_id, signature, challenge.nonce).await?;
 //!
 //!     println!("Authenticated! Token expires at: {:?}", token.expires_at);
 //!     Ok(())
@@ -37,6 +38,7 @@
 //! ```
 
 pub mod member;
+pub mod protocol;
 pub mod signing;
 
 /// Generated protobuf types for the Canton Sequencer API.
@@ -65,6 +67,9 @@ pub use proto::sequencer::sequencer_authentication::{
 
 // Re-export member types
 pub use member::{MemberCode, ParticipantId, MediatorId, SequencerId, UniqueIdentifier, Member};
+
+// Re-export protocol version types
+pub use protocol::{ProtocolVersion, LATEST_STABLE_VERSION, MINIMUM_STABLE_VERSION};
 
 /// Authentication token returned by the sequencer after successful authentication.
 #[derive(Debug, Clone)]
@@ -111,18 +116,52 @@ impl SequencerAuthClient {
         }
     }
 
-    /// Request a challenge from the sequencer.
+    /// Request a challenge from the sequencer using the latest stable protocol version.
+    ///
+    /// This is the first step in the authentication flow. The sequencer returns
+    /// a nonce and a list of key fingerprints that it considers valid for signing.
+    ///
+    /// Uses [`LATEST_STABLE_VERSION`] as the protocol version.
+    ///
+    /// # Arguments
+    /// * `member` - The member identifier requesting authentication (implements `Member` trait)
+    ///
+    /// # Returns
+    /// A `ChallengeResponse` containing the nonce to sign and valid key fingerprints.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let challenge = client.challenge(&participant_id).await?;
+    /// ```
+    pub async fn challenge<M: member::Member>(
+        &mut self,
+        member: &M,
+    ) -> Result<ChallengeResponse, tonic::Status> {
+        self.challenge_with_versions(member.to_proto_primitive(), vec![LATEST_STABLE_VERSION.as_i32()])
+            .await
+    }
+
+    /// Request a challenge from the sequencer with specific protocol versions.
     ///
     /// This is the first step in the authentication flow. The sequencer returns
     /// a nonce and a list of key fingerprints that it considers valid for signing.
     ///
     /// # Arguments
-    /// * `member` - The member identifier requesting authentication
+    /// * `member` - The member identifier string (e.g., "PAR::name::fingerprint")
     /// * `protocol_versions` - List of protocol versions the member supports
     ///
     /// # Returns
     /// A `ChallengeResponse` containing the nonce to sign and valid key fingerprints.
-    pub async fn challenge(
+    ///
+    /// # Example
+    /// ```ignore
+    /// use canton_sequencer_client::ProtocolVersion;
+    /// let challenge = client.challenge_with_versions(
+    ///     "PAR::myparticipant::abc123",
+    ///     vec![ProtocolVersion::V34.as_i32()]
+    /// ).await?;
+    /// ```
+    pub async fn challenge_with_versions(
         &mut self,
         member: impl Into<String>,
         protocol_versions: Vec<i32>,
@@ -143,20 +182,20 @@ impl SequencerAuthClient {
     /// authentication token.
     ///
     /// # Arguments
-    /// * `member` - The member identifier
+    /// * `member` - The member identifier (implements `Member` trait)
     /// * `signature` - The signature of the nonce
     /// * `nonce` - The nonce that was signed (from the challenge response)
     ///
     /// # Returns
     /// An `AuthToken` containing the authentication token and expiry time.
-    pub async fn authenticate(
+    pub async fn authenticate<M: member::Member>(
         &mut self,
-        member: impl Into<String>,
+        member: &M,
         signature: Signature,
         nonce: Vec<u8>,
     ) -> Result<AuthToken, tonic::Status> {
         let request = AuthenticateRequest {
-            member: member.into(),
+            member: member.to_proto_primitive(),
             signature: Some(signature),
             nonce,
         };
@@ -212,10 +251,10 @@ mod tests {
     fn test_challenge_request_creation() {
         let request = ChallengeRequest {
             member: "test-member".to_string(),
-            member_protocol_versions: vec![30],
+            member_protocol_versions: vec![LATEST_STABLE_VERSION.as_i32()],
         };
         assert_eq!(request.member, "test-member");
-        assert_eq!(request.member_protocol_versions, vec![30]);
+        assert_eq!(request.member_protocol_versions, vec![34]); // v34 is latest stable
     }
 
     #[test]
@@ -232,5 +271,11 @@ mod tests {
         let proto = participant.to_proto_primitive();
         assert!(proto.starts_with("PAR::myparticipant::"));
         assert!(proto.contains(&fingerprint));
+    }
+
+    #[test]
+    fn test_protocol_version_constants() {
+        assert_eq!(LATEST_STABLE_VERSION.as_i32(), 34);
+        assert!(LATEST_STABLE_VERSION.is_stable());
     }
 }

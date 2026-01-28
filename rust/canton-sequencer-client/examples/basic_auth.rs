@@ -14,7 +14,7 @@
 //! ```
 
 use canton_sequencer_client::{
-    member::Member, signing::Ed25519Signer, SequencerAuthClient,
+    member::Member, signing::Ed25519Signer, SequencerAuthClient, LATEST_STABLE_VERSION,
 };
 use std::env;
 
@@ -54,10 +54,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Connected successfully!");
 
     // Step 4: Request a challenge for our participant
+    // Uses LATEST_STABLE_VERSION (v34) by default
     println!("\n=== Authentication Challenge ===");
-    let member_str = participant_id.to_proto_primitive();
-    println!("Requesting challenge for: {}", member_str);
-    let challenge = client.challenge(&member_str, vec![30]).await?;
+    println!("Requesting challenge for: {}", participant_id);
+    println!("Using protocol version: {} (latest stable)", LATEST_STABLE_VERSION);
+    let challenge = client.challenge(&participant_id).await?;
 
     println!("Nonce (hex): {}", hex_encode(&challenge.nonce));
     println!("Valid key fingerprints from sequencer:");
@@ -74,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 6: Authenticate with the sequencer
     println!("\n=== Authentication ===");
     match client
-        .authenticate(&member_str, signature, challenge.nonce)
+        .authenticate(&participant_id, signature, challenge.nonce)
         .await
     {
         Ok(token) => {

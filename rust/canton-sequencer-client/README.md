@@ -6,6 +6,7 @@ A Rust gRPC client for the Canton Sequencer Authentication Service, built with [
 
 - **Member ID Generation**: Create participant, mediator, or sequencer IDs from signing keys
 - **Ed25519 signing support** via `ed25519-dalek`
+- **Protocol Version Constants**: Use the correct Canton protocol version automatically
 - Full gRPC client for `SequencerAuthenticationService`
 - Challenge-response authentication flow
 - Type-safe protobuf message definitions
@@ -25,7 +26,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 ```rust
 use canton_sequencer_client::{
-    SequencerAuthClient, signing::Ed25519Signer, member::Member, ParticipantId
+    SequencerAuthClient, signing::Ed25519Signer, Member
 };
 
 #[tokio::main]
@@ -37,20 +38,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 2: Create a Participant ID using the key's fingerprint as namespace
     // Format: PAR::myparticipant::<fingerprint>
     let participant_id = signer.participant_id("myparticipant")?;
-    println!("Participant ID: {}", participant_id.to_proto_primitive());
+    println!("Participant ID: {}", participant_id);
 
     // Step 3: Connect to the sequencer
     let mut client = SequencerAuthClient::connect("http://localhost:5001").await?;
 
-    // Step 4: Request a challenge
-    let member_str = participant_id.to_proto_primitive();
-    let challenge = client.challenge(&member_str, vec![30]).await?;
+    // Step 4: Request a challenge (uses latest stable protocol version v34)
+    let challenge = client.challenge(&participant_id).await?;
 
     // Step 5: Sign the nonce with Ed25519
     let signature = signer.sign_nonce(&challenge.nonce);
 
     // Step 6: Authenticate with the signed nonce
-    let token = client.authenticate(&member_str, signature, challenge.nonce).await?;
+    let token = client.authenticate(&participant_id, signature, challenge.nonce).await?;
     println!("Authenticated! Token expires at: {:?}", token.expires_at);
 
     // Step 7: Logout when done
@@ -58,6 +58,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     Ok(())
 }
+```
+
+### Protocol Versions
+
+The client automatically uses the latest stable protocol version (v34) when calling `challenge()`.
+If you need to specify a different version:
+
+```rust
+use canton_sequencer_client::{SequencerAuthClient, ProtocolVersion};
+
+// Use the default (latest stable version v34)
+let challenge = client.challenge(&participant_id).await?;
+
+// Or specify custom versions
+let challenge = client.challenge_with_versions(
+    "PAR::myparticipant::abc123",
+    vec![ProtocolVersion::V34.as_i32()]
+).await?;
 ```
 
 ### Member ID Generation
@@ -115,7 +133,7 @@ The authentication with Canton Sequencer follows a challenge-response pattern:
 
 1. **Generate Key**: Create or load an Ed25519 signing key
 2. **Create Member ID**: Generate a participant/mediator/sequencer ID using the key's fingerprint
-3. **Challenge**: Request a nonce from the sequencer with your member ID
+3. **Challenge**: Request a nonce from the sequencer (uses protocol v34 by default)
 4. **Sign**: Sign the nonce with your Ed25519 key
 5. **Authenticate**: Submit the signed nonce to receive an authentication token
 6. **Use Token**: The token is used in subsequent sequencer operations
@@ -131,9 +149,17 @@ The main client struct for interacting with the sequencer.
 
 - `connect(endpoint: &str) -> Result<Self, Error>` - Connect to a sequencer endpoint
 - `from_channel(channel: Channel) -> Self` - Create client from existing channel
-- `challenge(member: &str, versions: Vec<i32>) -> Result<ChallengeResponse, Status>` - Request authentication challenge
-- `authenticate(member: &str, signature: Signature, nonce: Vec<u8>) -> Result<AuthToken, Status>` - Authenticate with signed nonce
+- `challenge(member: &impl Member) -> Result<ChallengeResponse, Status>` - Request challenge with latest stable protocol version
+- `challenge_with_versions(member: &str, versions: Vec<i32>) -> Result<ChallengeResponse, Status>` - Request challenge with custom protocol versions
+- `authenticate(member: &impl Member, signature: Signature, nonce: Vec<u8>) -> Result<AuthToken, Status>` - Authenticate with signed nonce
 - `logout(token: Vec<u8>) -> Result<LogoutResponse, Status>` - Revoke authentication token
+
+### Protocol Version Constants
+
+- `LATEST_STABLE_VERSION` - The latest stable protocol version (v34)
+- `MINIMUM_STABLE_VERSION` - The minimum supported stable version (v34)
+- `ProtocolVersion::V34` - Protocol version 34 (stable)
+- `ProtocolVersion::V35` - Protocol version 35 (alpha)
 
 ### `Ed25519Signer`
 
