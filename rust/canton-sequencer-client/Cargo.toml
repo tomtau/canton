@@ -2,6 +2,7 @@
 name = "canton-sequencer-client"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.75"
 description = "Rust gRPC client for Canton Sequencer with authentication support"
 license = "Apache-2.0"
 authors = ["Digital Asset"]

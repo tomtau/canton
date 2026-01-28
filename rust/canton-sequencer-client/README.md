@@ -106,7 +106,7 @@ The main client struct for interacting with the sequencer.
 ## Building from Source
 
 Requirements:
-- Rust 1.70+ 
+- Rust 1.75 or later
 - Protocol Buffers compiler (`protoc`)
 
 ```bash
