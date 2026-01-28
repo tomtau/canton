@@ -9,23 +9,28 @@
 //! # Example
 //!
 //! ```ignore
-//! use canton_sequencer_client::{SequencerAuthClient, AuthToken};
+//! use canton_sequencer_client::{SequencerAuthClient, AuthToken, signing::Ed25519Signer};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Generate or load a signing key
+//!     let signer = Ed25519Signer::generate();
+//!
 //!     // Connect to the sequencer
 //!     let mut client = SequencerAuthClient::connect("http://localhost:5001").await?;
 //!
 //!     // Get a challenge
 //!     let challenge = client.challenge("member-id", vec![30]).await?;
-//!     println!("Nonce: {:?}", challenge.nonce);
 //!
-//!     // Sign the nonce with your key and authenticate
-//!     // let token = client.authenticate("member-id", signature, challenge.nonce).await?;
+//!     // Sign the nonce and authenticate
+//!     let signature = signer.sign_nonce(&challenge.nonce);
+//!     let token = client.authenticate("member-id", signature, challenge.nonce).await?;
 //!
 //!     Ok(())
 //! }
 //! ```
+
+pub mod signing;
 
 /// Generated protobuf types for the Canton Sequencer API.
 pub mod proto {
@@ -183,7 +188,7 @@ mod tests {
     fn test_signature_creation() {
         // Test that we can create a Signature struct
         let sig = Signature {
-            format: SignatureFormat::Der as i32,
+            format: SignatureFormat::Concat as i32,
             signature: vec![1, 2, 3, 4],
             signed_by: "test-key-fingerprint".to_string(),
             signing_algorithm_spec: SigningAlgorithmSpec::Ed25519 as i32,
