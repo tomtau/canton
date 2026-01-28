@@ -6,30 +6,37 @@
 //! This crate provides a Rust client for interacting with the Canton Sequencer
 //! authentication service using gRPC (via tonic).
 //!
+//! # Features
+//!
+//! - **Member ID Generation**: Create participant, mediator, or sequencer IDs from signing keys
+//! - **Ed25519 Signing**: Sign challenge nonces for authentication
+//! - **gRPC Client**: Connect and authenticate with Canton sequencers
+//!
 //! # Example
 //!
 //! ```ignore
-//! use canton_sequencer_client::{SequencerAuthClient, AuthToken, signing::Ed25519Signer};
+//! use canton_sequencer_client::{SequencerAuthClient, signing::Ed25519Signer, member::ParticipantId};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Generate or load a signing key
+//!     // Generate a signing key and create a participant ID
 //!     let signer = Ed25519Signer::generate();
+//!     let participant_id = ParticipantId::create("myparticipant", signer.fingerprint())?;
 //!
 //!     // Connect to the sequencer
 //!     let mut client = SequencerAuthClient::connect("http://localhost:5001").await?;
 //!
-//!     // Get a challenge
-//!     let challenge = client.challenge("member-id", vec![30]).await?;
-//!
-//!     // Sign the nonce and authenticate
+//!     // Authenticate using challenge-response
+//!     let challenge = client.challenge(participant_id.to_proto_primitive(), vec![30]).await?;
 //!     let signature = signer.sign_nonce(&challenge.nonce);
-//!     let token = client.authenticate("member-id", signature, challenge.nonce).await?;
+//!     let token = client.authenticate(participant_id.to_proto_primitive(), signature, challenge.nonce).await?;
 //!
+//!     println!("Authenticated! Token expires at: {:?}", token.expires_at);
 //!     Ok(())
 //! }
 //! ```
 
+pub mod member;
 pub mod signing;
 
 /// Generated protobuf types for the Canton Sequencer API.
@@ -55,6 +62,9 @@ pub use proto::sequencer::sequencer_authentication::{
     AuthenticateRequest, AuthenticateResponse, ChallengeRequest, ChallengeResponse, LogoutRequest,
     LogoutResponse,
 };
+
+// Re-export member types
+pub use member::{MemberCode, ParticipantId, MediatorId, SequencerId, UniqueIdentifier, Member};
 
 /// Authentication token returned by the sequencer after successful authentication.
 #[derive(Debug, Clone)]
@@ -206,5 +216,21 @@ mod tests {
         };
         assert_eq!(request.member, "test-member");
         assert_eq!(request.member_protocol_versions, vec![30]);
+    }
+
+    #[test]
+    fn test_member_id_generation() {
+        use signing::Ed25519Signer;
+        
+        let signer = Ed25519Signer::generate();
+        let fingerprint = signer.fingerprint();
+        
+        // Create a participant ID using the signing key's fingerprint
+        let participant = ParticipantId::create("myparticipant", &fingerprint).unwrap();
+        
+        // Verify the format
+        let proto = participant.to_proto_primitive();
+        assert!(proto.starts_with("PAR::myparticipant::"));
+        assert!(proto.contains(&fingerprint));
     }
 }

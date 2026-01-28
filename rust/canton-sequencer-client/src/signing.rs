@@ -167,6 +167,39 @@ impl Ed25519Signer {
         let sig = ed25519_dalek::Signature::from_bytes(signature);
         self.signing_key.verifying_key().verify(message, &sig).is_ok()
     }
+
+    /// Create a ParticipantId using this signer's key fingerprint as the namespace.
+    ///
+    /// # Arguments
+    /// * `identifier` - Human-readable identifier for the participant
+    ///
+    /// # Example
+    /// ```
+    /// use canton_sequencer_client::signing::Ed25519Signer;
+    ///
+    /// let signer = Ed25519Signer::generate();
+    /// let participant_id = signer.participant_id("myparticipant").unwrap();
+    /// println!("Participant: {}", participant_id);
+    /// ```
+    pub fn participant_id(&self, identifier: impl Into<String>) -> Result<crate::member::ParticipantId, crate::member::MemberError> {
+        crate::member::ParticipantId::create(identifier, self.fingerprint())
+    }
+
+    /// Create a MediatorId using this signer's key fingerprint as the namespace.
+    ///
+    /// # Arguments
+    /// * `identifier` - Human-readable identifier for the mediator
+    pub fn mediator_id(&self, identifier: impl Into<String>) -> Result<crate::member::MediatorId, crate::member::MemberError> {
+        crate::member::MediatorId::create(identifier, self.fingerprint())
+    }
+
+    /// Create a SequencerId using this signer's key fingerprint as the namespace.
+    ///
+    /// # Arguments
+    /// * `identifier` - Human-readable identifier for the sequencer
+    pub fn sequencer_id(&self, identifier: impl Into<String>) -> Result<crate::member::SequencerId, crate::member::MemberError> {
+        crate::member::SequencerId::create(identifier, self.fingerprint())
+    }
 }
 
 /// Simple SHA-256 implementation for fingerprint computation.
