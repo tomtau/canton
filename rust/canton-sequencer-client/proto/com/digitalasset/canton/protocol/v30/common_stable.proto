@@ -1,0 +1,12 @@
+// Copyright (c) 2026 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package com.digitalasset.canton.protocol.v30;
+
+message AggregationRule {
+  // Members who are allowed to send a request for the underlying aggregation.
+  repeated string eligible_members = 1;
+  int32 threshold = 2;
+}

@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package com.digitalasset.canton.protocol.v30;
+
+import "com/digitalasset/canton/crypto/v30/crypto.proto";
+import "google/protobuf/duration.proto";
+
+// Static synchronizer parameters - returned by GetSynchronizerParameters
+message StaticSynchronizerParameters {
+  com.digitalasset.canton.crypto.v30.RequiredSigningSpecs required_signing_specs = 1;
+  com.digitalasset.canton.crypto.v30.RequiredEncryptionSpecs required_encryption_specs = 2;
+  repeated com.digitalasset.canton.crypto.v30.SymmetricKeyScheme required_symmetric_key_schemes = 3;
+  repeated com.digitalasset.canton.crypto.v30.HashAlgorithm required_hash_algorithms = 4;
+  repeated com.digitalasset.canton.crypto.v30.CryptoKeyFormat required_crypto_key_formats = 5;
+  repeated com.digitalasset.canton.crypto.v30.SignatureFormat required_signature_formats = 6;
+  int32 protocol_version = 7;
+
+  // Serial of the synchronizer. Must be non-negative.
+  int32 serial = 8;
+
+  // Flag to enable transparency checks.
+  bool enable_transparency_checks = 9;
+
+  google.protobuf.Duration topology_change_delay = 10;
+}
