@@ -8,8 +8,9 @@
 //! 2. Create a Participant ID from the key
 //! 3. Connect and perform handshake with SequencerConnectService
 //! 4. Get synchronizer info and parameters
-//! 5. Authenticate using SequencerAuthenticationService
-//! 6. Use SequencerService to get traffic state
+//! 5. Register onboarding topology transactions
+//! 6. Authenticate using SequencerAuthenticationService
+//! 7. Use SequencerService to get traffic state
 //!
 //! Usage:
 //! ```bash
@@ -17,7 +18,7 @@
 //! ```
 
 use canton_sequencer_client::{
-    member::Member, signing::Ed25519Signer,
+    member::Member, signing::Ed25519Signer, topology::TopologyTransactionBuilder,
     SequencerConnectClient, SequencerAuthClient, SequencerServiceClient,
     LATEST_STABLE_VERSION,
 };
@@ -83,15 +84,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Get synchronizer ID
     println!("\n--- Synchronizer Info ---");
-    match connect_client.get_synchronizer_id().await {
+    let sync_info = match connect_client.get_synchronizer_id().await {
         Ok(info) => {
             println!("Physical Synchronizer ID: {}", info.physical_synchronizer_id);
             println!("Sequencer UID: {}", info.sequencer_uid);
+            Some(info)
         }
         Err(e) => {
             println!("Failed to get synchronizer ID: {}", e);
+            None
         }
-    }
+    };
 
     // Verify active
     println!("\n--- Verify Active ---");
@@ -114,7 +117,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Step 4: Authentication
+    // Step 4: Register onboarding topology transactions
+    println!("\n=== Register Topology Transactions ===");
+    if let Some(ref info) = sync_info {
+        let builder = TopologyTransactionBuilder::new(&signer);
+        let transactions = builder.onboarding_transactions(&participant_id, &info.physical_synchronizer_id);
+        
+        println!("Created {} topology transactions:", transactions.len());
+        println!("  - NamespaceDelegation (root)");
+        println!("  - OwnerToKeyMapping");
+        println!("  - SynchronizerTrustCertificate");
+        
+        match connect_client.register_onboarding_topology_transactions(transactions).await {
+            Ok(_) => {
+                println!("Topology transactions registered successfully!");
+            }
+            Err(e) => {
+                println!("Failed to register topology transactions: {}", e);
+                println!("Note: This may fail if the participant is already registered or the synchronizer doesn't accept external registrations.");
+            }
+        }
+    } else {
+        println!("Skipping topology registration (no synchronizer info)");
+    }
+
+    // Step 5: Authentication
     println!("\n=== SequencerAuthenticationService ===");
     let mut auth_client = SequencerAuthClient::connect(endpoint.clone()).await?;
 
@@ -148,7 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Expires at: {} seconds", expires_at.seconds);
             }
 
-            // Step 5: Use SequencerService
+            // Step 6: Use SequencerService
             println!("\n=== SequencerService ===");
             let mut service_client = SequencerServiceClient::connect(endpoint.clone()).await?;
 

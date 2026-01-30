@@ -10,6 +10,7 @@
 //!
 //! - **Member ID Generation**: Create participant, mediator, or sequencer IDs from signing keys
 //! - **Ed25519 Signing**: Sign challenge nonces for authentication
+//! - **Topology Transactions**: Create and sign topology transactions for onboarding
 //! - **Sequencer Connect**: Perform handshakes, get synchronizer info, register topology transactions
 //! - **Sequencer Authentication**: Challenge-response authentication flow
 //! - **Sequencer Service**: Get traffic state, subscribe to events
@@ -20,7 +21,7 @@
 //! ```ignore
 //! use canton_sequencer_client::{
 //!     SequencerConnectClient, SequencerAuthClient, SequencerServiceClient,
-//!     signing::Ed25519Signer, Member
+//!     signing::Ed25519Signer, topology::TopologyTransactionBuilder, Member
 //! };
 //!
 //! #[tokio::main]
@@ -38,13 +39,21 @@
 //!     let sync_id = connect_client.get_synchronizer_id().await?;
 //!     println!("Synchronizer ID: {}", sync_id.physical_synchronizer_id);
 //!
-//!     // Step 2: Authenticate
+//!     // Step 2: Register onboarding topology transactions
+//!     let builder = TopologyTransactionBuilder::new(&signer);
+//!     let transactions = builder.onboarding_transactions(
+//!         &participant_id,
+//!         &sync_id.physical_synchronizer_id
+//!     );
+//!     connect_client.register_onboarding_topology_transactions(transactions).await?;
+//!
+//!     // Step 3: Authenticate
 //!     let mut auth_client = SequencerAuthClient::connect("http://localhost:5001").await?;
 //!     let challenge = auth_client.challenge(&participant_id).await?;
 //!     let signature = signer.sign_nonce(&challenge.nonce);
 //!     let token = auth_client.authenticate(&participant_id, signature, challenge.nonce).await?;
 //!
-//!     // Step 3: Use sequencer service (requires authentication)
+//!     // Step 4: Use sequencer service (requires authentication)
 //!     let mut service_client = SequencerServiceClient::connect("http://localhost:5001").await?;
 //!     let traffic = service_client.get_traffic_state(&participant_id, 0).await?;
 //!     println!("Traffic state: {:?}", traffic);
@@ -56,6 +65,7 @@
 pub mod member;
 pub mod protocol;
 pub mod signing;
+pub mod topology;
 
 /// Generated protobuf types for the Canton Sequencer API.
 pub mod proto {
@@ -98,18 +108,22 @@ pub use proto::sequencer::sequencer_connect::{
     HandshakeRequest, HandshakeResponse, GetSynchronizerIdRequest, GetSynchronizerIdResponse,
     GetSynchronizerParametersRequest, GetSynchronizerParametersResponse,
     VerifyActiveRequest, VerifyActiveResponse,
+    RegisterOnboardingTopologyTransactionsRequest, RegisterOnboardingTopologyTransactionsResponse,
 };
 pub use proto::sequencer::{
     GetTrafficStateForMemberRequest, GetTrafficStateForMemberResponse,
     GetTimeRequest, GetTimeResponse,
 };
-pub use proto::protocol::TrafficState;
+pub use proto::protocol::{TrafficState, SignedTopologyTransaction};
 
 // Re-export member types
 pub use member::{MemberCode, ParticipantId, MediatorId, SequencerId, UniqueIdentifier, Member};
 
 // Re-export protocol version types
 pub use protocol::{ProtocolVersion, LATEST_STABLE_VERSION, MINIMUM_STABLE_VERSION};
+
+// Re-export topology types
+pub use topology::TopologyTransactionBuilder;
 
 /// Authentication token returned by the sequencer after successful authentication.
 #[derive(Debug, Clone)]
@@ -228,6 +242,54 @@ impl SequencerConnectClient {
     pub async fn verify_active(&mut self) -> Result<VerifyActiveResponse, tonic::Status> {
         let request = VerifyActiveRequest {};
         let response = self.inner.verify_active(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// Register onboarding topology transactions with the sequencer.
+    ///
+    /// This is used to submit the topology transactions required for participant
+    /// onboarding before authentication. Typically includes:
+    /// - Namespace delegation (root certificate)
+    /// - Owner-to-key mapping
+    /// - Synchronizer trust certificate
+    ///
+    /// # Arguments
+    /// * `transactions` - The signed topology transactions to register
+    ///
+    /// # Example
+    /// ```ignore
+    /// use canton_sequencer_client::{
+    ///     SequencerConnectClient, TopologyTransactionBuilder,
+    ///     signing::Ed25519Signer
+    /// };
+    ///
+    /// let signer = Ed25519Signer::generate();
+    /// let participant_id = signer.participant_id("myparticipant")?;
+    ///
+    /// let mut client = SequencerConnectClient::connect("http://localhost:5001").await?;
+    /// let sync_info = client.get_synchronizer_id().await?;
+    ///
+    /// // Build and sign onboarding transactions
+    /// let builder = TopologyTransactionBuilder::new(&signer);
+    /// let transactions = builder.onboarding_transactions(
+    ///     &participant_id,
+    ///     &sync_info.physical_synchronizer_id
+    /// );
+    ///
+    /// // Submit to sequencer
+    /// client.register_onboarding_topology_transactions(transactions).await?;
+    /// ```
+    pub async fn register_onboarding_topology_transactions(
+        &mut self,
+        transactions: Vec<SignedTopologyTransaction>,
+    ) -> Result<RegisterOnboardingTopologyTransactionsResponse, tonic::Status> {
+        let request = RegisterOnboardingTopologyTransactionsRequest {
+            topology_transactions: transactions,
+        };
+        let response = self
+            .inner
+            .register_onboarding_topology_transactions(request)
+            .await?;
         Ok(response.into_inner())
     }
 

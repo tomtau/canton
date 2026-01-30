@@ -4,9 +4,10 @@ A Rust gRPC client for Canton Sequencer services, built with [tonic](https://git
 
 ## Features
 
-- **SequencerConnectService**: Handshake, get synchronizer info, verify active status
+- **SequencerConnectService**: Handshake, get synchronizer info, register onboarding topology transactions
 - **SequencerAuthenticationService**: Challenge-response authentication flow  
 - **SequencerService**: Get traffic state, sequencing time, and subscribe to events
+- **Topology Transactions**: Create and sign topology transactions for participant onboarding
 - **Member ID Generation**: Create participant, mediator, or sequencer IDs from signing keys
 - **Ed25519 signing support** via `ed25519-dalek`
 - **Protocol Version Constants**: Use the correct Canton protocol version automatically
@@ -23,12 +24,12 @@ canton-sequencer-client = { path = "path/to/canton-sequencer-client" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
-### Complete Example: Connect, Authenticate, and Get Traffic State
+### Complete Example: Onboarding, Connect, Authenticate, and Get Traffic State
 
 ```rust
 use canton_sequencer_client::{
     SequencerConnectClient, SequencerAuthClient, SequencerServiceClient,
-    signing::Ed25519Signer, Member
+    signing::Ed25519Signer, topology::TopologyTransactionBuilder, Member
 };
 
 #[tokio::main]
@@ -48,18 +49,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Synchronizer ID: {}", sync_info.physical_synchronizer_id);
     println!("Sequencer UID: {}", sync_info.sequencer_uid);
 
-    // Verify sequencer is active
-    let active = connect_client.verify_active().await?;
-    println!("Sequencer active: {:?}", active);
+    // Step 3: Register onboarding topology transactions
+    let builder = TopologyTransactionBuilder::new(&signer);
+    let transactions = builder.onboarding_transactions(
+        &participant_id,
+        &sync_info.physical_synchronizer_id
+    );
+    connect_client.register_onboarding_topology_transactions(transactions).await?;
+    println!("Topology transactions registered");
 
-    // Step 3: Authenticate with challenge-response
+    // Step 4: Authenticate with challenge-response
     let mut auth_client = SequencerAuthClient::connect("http://localhost:5001").await?;
     let challenge = auth_client.challenge(&participant_id).await?;
     let signature = signer.sign_nonce(&challenge.nonce);
     let token = auth_client.authenticate(&participant_id, signature, challenge.nonce).await?;
     println!("Authenticated! Token expires at: {:?}", token.expires_at);
 
-    // Step 4: Use the SequencerService (requires authentication)
+    // Step 5: Use the SequencerService (requires authentication)
     let mut service_client = SequencerServiceClient::connect("http://localhost:5001").await?;
     
     // Get current sequencing time
@@ -72,12 +78,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Traffic state: {:?}", traffic);
     }
 
-    // Step 5: Logout when done
+    // Step 6: Logout when done
     auth_client.logout(token.token).await?;
     
     Ok(())
 }
 ```
+
+### Topology Transactions (Participant Onboarding)
+
+Before a participant can authenticate, it must register its topology transactions.
+Use `TopologyTransactionBuilder` to create the required transactions:
+
+```rust
+use canton_sequencer_client::{
+    SequencerConnectClient, signing::Ed25519Signer,
+    topology::TopologyTransactionBuilder
+};
+
+let signer = Ed25519Signer::generate();
+let participant_id = signer.participant_id("myparticipant")?;
+
+// Create topology transaction builder
+let builder = TopologyTransactionBuilder::new(&signer);
+
+// Option 1: Create all onboarding transactions at once
+let transactions = builder.onboarding_transactions(&participant_id, "synchronizer::abc123");
+
+// Option 2: Create individual transactions
+let nsd = builder.namespace_delegation_root();           // Root cert for namespace
+let otk = builder.owner_to_key_mapping(&participant_id); // Map participant to key
+let stc = builder.synchronizer_trust_certificate(        // Trust the synchronizer
+    &participant_id, "synchronizer::abc123"
+);
+
+// Sign and submit
+let signed_nsd = builder.sign(nsd);
+let signed_otk = builder.sign(otk);
+let signed_stc = builder.sign(stc);
+
+// Register with sequencer
+let mut client = SequencerConnectClient::connect("http://localhost:5001").await?;
+client.register_onboarding_topology_transactions(
+    vec![signed_nsd, signed_otk, signed_stc]
+).await?;
+```
+
+The three required topology transactions for onboarding are:
+1. **NamespaceDelegation**: Establishes the signing key as the root authority for the participant's namespace
+2. **OwnerToKeyMapping**: Maps the participant to its signing/protocol keys
+3. **SynchronizerTrustCertificate**: Declares that the participant trusts the synchronizer
 
 ### SequencerConnectService (Before Authentication)
 
@@ -193,9 +243,10 @@ The typical flow for connecting to a Canton sequencer:
 
 1. **Connect & Handshake** (`SequencerConnectClient`): Verify protocol compatibility
 2. **Get Synchronizer Info**: Retrieve synchronizer ID and parameters
-3. **Authenticate** (`SequencerAuthClient`): Challenge-response to get token
-4. **Use Sequencer** (`SequencerServiceClient`): Get traffic state, subscribe, etc.
-5. **Logout**: Revoke authentication token when done
+3. **Register Topology Transactions** (`TopologyTransactionBuilder`): Submit onboarding topology
+4. **Authenticate** (`SequencerAuthClient`): Challenge-response to get token
+5. **Use Sequencer** (`SequencerServiceClient`): Get traffic state, subscribe, etc.
+6. **Logout**: Revoke authentication token when done
 
 ## API Reference
 
@@ -211,6 +262,7 @@ Client for initial connection and registration (before authentication).
 - `get_synchronizer_id()` - Get synchronizer ID and sequencer UID
 - `get_synchronizer_parameters()` - Get static synchronizer parameters
 - `verify_active()` - Verify the sequencer is active
+- `register_onboarding_topology_transactions(transactions)` - Register topology transactions for onboarding
 
 ### `SequencerAuthClient`
 
@@ -234,6 +286,21 @@ Client for sequencer operations (requires authentication).
 - `get_traffic_state(member, timestamp)` - Get traffic state for a member
 - `get_time()` - Get current sequencing time
 - `inner()` - Access inner gRPC client for advanced operations
+
+### `TopologyTransactionBuilder`
+
+Builder for creating and signing topology transactions for participant onboarding.
+
+#### Methods
+
+- `new(signer)` - Create a builder with the given Ed25519 signer
+- `namespace()` - Get the namespace (key fingerprint)
+- `namespace_delegation_root()` - Create root namespace delegation transaction
+- `owner_to_key_mapping(member)` - Create owner-to-key mapping transaction
+- `synchronizer_trust_certificate(member, sync_id)` - Create synchronizer trust certificate
+- `sign(transaction)` - Sign a topology transaction
+- `sign_as_proposal(transaction)` - Sign as a proposal (not fully authorized)
+- `onboarding_transactions(member, sync_id)` - Create all onboarding transactions at once
 
 ### Protocol Version Constants
 
@@ -266,6 +333,14 @@ Ed25519 signing key for authentication.
 - `SequencerId` - A sequencer identifier (code: `SEQ`)
 - `UniqueIdentifier` - Base identifier with `identifier::fingerprint` format
 - `Member` trait - Common interface for all member types
+
+### Topology Transaction Types
+
+- `SignedTopologyTransaction` - A signed topology transaction
+- `TopologyTransaction` - An unsigned topology transaction
+- `NamespaceDelegation` - Delegates authority over a namespace
+- `OwnerToKeyMapping` - Maps a member to their keys
+- `SynchronizerTrustCertificate` - Trust declaration for a synchronizer
 
 ### Other Types
 
