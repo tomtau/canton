@@ -1,0 +1,102 @@
+// Copyright (c) 2026 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package com.digitalasset.canton.sequencer.api.v30;
+
+import "com/digitalasset/canton/protocol/v30/traffic_control_parameters.proto";
+import "com/digitalasset/canton/topology/admin/v30/common.proto";
+import "com/digitalasset/canton/v30/trace_context.proto";
+
+// The service that a member can use to send messages to the synchronizer and
+// receive events from the synchronizer
+service SequencerService {
+  // Submit a request to the sequencer.
+  rpc SendAsync(SendAsyncRequest) returns (SendAsyncResponse);
+
+  // Establishes a stream with the server to receive sequenced events from the synchronizer.
+  rpc Subscribe(SubscriptionRequest) returns (stream SubscriptionResponse);
+
+  // Acknowledge that events have been read (for pruning watermarks).
+  rpc AcknowledgeSigned(AcknowledgeSignedRequest) returns (AcknowledgeSignedResponse);
+
+  // Download the topology state for a member up to the topology transaction that made the member known.
+  rpc DownloadTopologyStateForInit(DownloadTopologyStateForInitRequest) returns (stream DownloadTopologyStateForInitResponse);
+
+  // Returns a hash of the topology state for BFT verification.
+  rpc DownloadTopologyStateForInitHash(DownloadTopologyStateForInitHashRequest) returns (DownloadTopologyStateForInitHashResponse);
+
+  // Return the currently known traffic state for a member. Callers must be authorized.
+  rpc GetTrafficStateForMember(GetTrafficStateForMemberRequest) returns (GetTrafficStateForMemberResponse);
+
+  // Return a "current" sequencing time for ordering guarantees.
+  rpc GetTime(GetTimeRequest) returns (GetTimeResponse);
+}
+
+message SendAsyncRequest {
+  // Contains a versioned SignedContent which itself contains a versioned SubmissionRequest.
+  bytes signed_submission_request = 1;
+}
+
+message SendAsyncResponse {}
+
+message SubscriptionRequest {
+  string member = 1;
+
+  // Timestamp to start the subscription from (inclusive).
+  // In microseconds of UTC time since Unix epoch
+  optional int64 timestamp = 2;
+}
+
+message SubscriptionResponse {
+  // Serialized SignedContent[SequencedEvent[ClosedEnvelope]]
+  bytes signed_sequenced_event = 1;
+
+  // optional, canton trace context
+  com.digitalasset.canton.v30.TraceContext trace_context = 2;
+}
+
+message AcknowledgeSignedRequest {
+  // Serialized SignedContent[AcknowledgeRequest]
+  bytes signed_acknowledge_request = 1;
+}
+
+message AcknowledgeSignedResponse {}
+
+message DownloadTopologyStateForInitRequest {
+  // Member for which to get the topology state
+  string member = 1;
+}
+
+message DownloadTopologyStateForInitResponse {
+  com.digitalasset.canton.topology.admin.v30.TopologyTransactions topology_transactions = 1;
+}
+
+message DownloadTopologyStateForInitHashRequest {
+  // Member for which to get the topology state hash
+  string member = 1;
+}
+
+message DownloadTopologyStateForInitHashResponse {
+  // Hash of contents of a call to DownloadTopologyStateForInit
+  bytes topology_state_hash = 1;
+}
+
+message GetTrafficStateForMemberRequest {
+  // Member for which to get the traffic state
+  string member = 1;
+  // Timestamp at which to get the traffic state
+  int64 timestamp = 2;
+}
+
+message GetTrafficStateForMemberResponse {
+  com.digitalasset.canton.protocol.v30.TrafficState traffic_state = 1;
+}
+
+message GetTimeRequest {}
+
+message GetTimeResponse {
+  // The result can be empty if the sequencer is still initializing.
+  optional int64 sequencing_timestamp = 1;
+}

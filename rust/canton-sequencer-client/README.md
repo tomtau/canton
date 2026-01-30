@@ -1,14 +1,15 @@
 # Canton Sequencer Client (Rust)
 
-A Rust gRPC client for the Canton Sequencer Authentication Service, built with [tonic](https://github.com/hyperium/tonic).
+A Rust gRPC client for Canton Sequencer services, built with [tonic](https://github.com/hyperium/tonic).
 
 ## Features
 
+- **SequencerConnectService**: Handshake, get synchronizer info, verify active status
+- **SequencerAuthenticationService**: Challenge-response authentication flow  
+- **SequencerService**: Get traffic state, sequencing time, and subscribe to events
 - **Member ID Generation**: Create participant, mediator, or sequencer IDs from signing keys
 - **Ed25519 signing support** via `ed25519-dalek`
 - **Protocol Version Constants**: Use the correct Canton protocol version automatically
-- Full gRPC client for `SequencerAuthenticationService`
-- Challenge-response authentication flow
 - Type-safe protobuf message definitions
 - TLS support via tonic
 
@@ -22,59 +23,118 @@ canton-sequencer-client = { path = "path/to/canton-sequencer-client" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
 
-### Complete Example: Generate Participant ID and Authenticate
+### Complete Example: Connect, Authenticate, and Get Traffic State
 
 ```rust
 use canton_sequencer_client::{
-    SequencerAuthClient, signing::Ed25519Signer, Member
+    SequencerConnectClient, SequencerAuthClient, SequencerServiceClient,
+    signing::Ed25519Signer, Member
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Step 1: Generate an Ed25519 signing key
+    // Step 1: Generate a signing key and create a participant ID
     let signer = Ed25519Signer::generate();
-    println!("Key fingerprint: {}", signer.fingerprint());
-
-    // Step 2: Create a Participant ID using the key's fingerprint as namespace
-    // Format: PAR::myparticipant::<fingerprint>
     let participant_id = signer.participant_id("myparticipant")?;
     println!("Participant ID: {}", participant_id);
 
-    // Step 3: Connect to the sequencer
-    let mut client = SequencerAuthClient::connect("http://localhost:5001").await?;
+    // Step 2: Connect and perform handshake
+    let mut connect_client = SequencerConnectClient::connect("http://localhost:5001").await?;
+    let handshake = connect_client.handshake().await?;
+    println!("Server protocol version: {}", handshake.server_protocol_version);
 
-    // Step 4: Request a challenge (uses latest stable protocol version v34)
-    let challenge = client.challenge(&participant_id).await?;
+    // Get synchronizer info
+    let sync_info = connect_client.get_synchronizer_id().await?;
+    println!("Synchronizer ID: {}", sync_info.physical_synchronizer_id);
+    println!("Sequencer UID: {}", sync_info.sequencer_uid);
 
-    // Step 5: Sign the nonce with Ed25519
+    // Verify sequencer is active
+    let active = connect_client.verify_active().await?;
+    println!("Sequencer active: {:?}", active);
+
+    // Step 3: Authenticate with challenge-response
+    let mut auth_client = SequencerAuthClient::connect("http://localhost:5001").await?;
+    let challenge = auth_client.challenge(&participant_id).await?;
     let signature = signer.sign_nonce(&challenge.nonce);
-
-    // Step 6: Authenticate with the signed nonce
-    let token = client.authenticate(&participant_id, signature, challenge.nonce).await?;
+    let token = auth_client.authenticate(&participant_id, signature, challenge.nonce).await?;
     println!("Authenticated! Token expires at: {:?}", token.expires_at);
 
-    // Step 7: Logout when done
-    client.logout(token.token).await?;
+    // Step 4: Use the SequencerService (requires authentication)
+    let mut service_client = SequencerServiceClient::connect("http://localhost:5001").await?;
+    
+    // Get current sequencing time
+    if let Some(time) = service_client.get_time().await? {
+        println!("Current sequencing time: {}", time);
+    }
+    
+    // Get traffic state for the member
+    if let Some(traffic) = service_client.get_traffic_state(&participant_id, 0).await? {
+        println!("Traffic state: {:?}", traffic);
+    }
+
+    // Step 5: Logout when done
+    auth_client.logout(token.token).await?;
     
     Ok(())
 }
 ```
 
+### SequencerConnectService (Before Authentication)
+
+Use `SequencerConnectClient` for initial connection and registration:
+
+```rust
+use canton_sequencer_client::SequencerConnectClient;
+
+let mut client = SequencerConnectClient::connect("http://localhost:5001").await?;
+
+// Perform protocol version handshake
+let handshake = client.handshake().await?;
+
+// Get synchronizer ID and sequencer UID
+let sync_info = client.get_synchronizer_id().await?;
+
+// Get static synchronizer parameters (crypto specs, etc.)
+let params = client.get_synchronizer_parameters().await?;
+
+// Verify the sequencer is active
+let active_response = client.verify_active().await?;
+```
+
+### SequencerService (After Authentication)
+
+Use `SequencerServiceClient` to access sequencer operations:
+
+```rust
+use canton_sequencer_client::SequencerServiceClient;
+
+let mut client = SequencerServiceClient::connect("http://localhost:5001").await?;
+
+// Get traffic state for a member at a specific timestamp
+let traffic_state = client.get_traffic_state(&participant_id, timestamp_micros).await?;
+
+// Get current sequencing time
+let sequencing_time = client.get_time().await?;
+
+// For advanced operations (subscribe, send), access the inner client
+let inner = client.inner();
+```
+
 ### Protocol Versions
 
-The client automatically uses the latest stable protocol version (v34) when calling `challenge()`.
+The client automatically uses the latest stable protocol version (v34) when calling `challenge()` or `handshake()`.
 If you need to specify a different version:
 
 ```rust
-use canton_sequencer_client::{SequencerAuthClient, ProtocolVersion};
+use canton_sequencer_client::{SequencerConnectClient, ProtocolVersion};
 
 // Use the default (latest stable version v34)
-let challenge = client.challenge(&participant_id).await?;
+let handshake = client.handshake().await?;
 
 // Or specify custom versions
-let challenge = client.challenge_with_versions(
-    "PAR::myparticipant::abc123",
-    vec![ProtocolVersion::V34.as_i32()]
+let handshake = client.handshake_with_versions(
+    vec![ProtocolVersion::V34.as_i32()],
+    Some(ProtocolVersion::V34.as_i32())  // minimum version
 ).await?;
 ```
 
@@ -127,32 +187,53 @@ let signer2 = Ed25519Signer::from_secret_key(&secret_bytes).unwrap();
 let public_key = signer.public_key_bytes();
 ```
 
-## Authentication Flow
+## Connection Flow
 
-The authentication with Canton Sequencer follows a challenge-response pattern:
+The typical flow for connecting to a Canton sequencer:
 
-1. **Generate Key**: Create or load an Ed25519 signing key
-2. **Create Member ID**: Generate a participant/mediator/sequencer ID using the key's fingerprint
-3. **Challenge**: Request a nonce from the sequencer (uses protocol v34 by default)
-4. **Sign**: Sign the nonce with your Ed25519 key
-5. **Authenticate**: Submit the signed nonce to receive an authentication token
-6. **Use Token**: The token is used in subsequent sequencer operations
-7. **Logout**: When done, revoke your authentication token
+1. **Connect & Handshake** (`SequencerConnectClient`): Verify protocol compatibility
+2. **Get Synchronizer Info**: Retrieve synchronizer ID and parameters
+3. **Authenticate** (`SequencerAuthClient`): Challenge-response to get token
+4. **Use Sequencer** (`SequencerServiceClient`): Get traffic state, subscribe, etc.
+5. **Logout**: Revoke authentication token when done
 
 ## API Reference
 
-### `SequencerAuthClient`
+### `SequencerConnectClient`
 
-The main client struct for interacting with the sequencer.
+Client for initial connection and registration (before authentication).
 
 #### Methods
 
-- `connect(endpoint: &str) -> Result<Self, Error>` - Connect to a sequencer endpoint
-- `from_channel(channel: Channel) -> Self` - Create client from existing channel
-- `challenge(member: &impl Member) -> Result<ChallengeResponse, Status>` - Request challenge with latest stable protocol version
-- `challenge_with_versions(member: &str, versions: Vec<i32>) -> Result<ChallengeResponse, Status>` - Request challenge with custom protocol versions
-- `authenticate(member: &impl Member, signature: Signature, nonce: Vec<u8>) -> Result<AuthToken, Status>` - Authenticate with signed nonce
-- `logout(token: Vec<u8>) -> Result<LogoutResponse, Status>` - Revoke authentication token
+- `connect(endpoint)` - Connect to a sequencer endpoint
+- `handshake()` - Perform protocol version handshake with default version
+- `handshake_with_versions(versions, min_version)` - Handshake with custom versions
+- `get_synchronizer_id()` - Get synchronizer ID and sequencer UID
+- `get_synchronizer_parameters()` - Get static synchronizer parameters
+- `verify_active()` - Verify the sequencer is active
+
+### `SequencerAuthClient`
+
+Client for challenge-response authentication.
+
+#### Methods
+
+- `connect(endpoint)` - Connect to a sequencer endpoint
+- `challenge(member)` - Request challenge with latest stable protocol version
+- `challenge_with_versions(member, versions)` - Request challenge with custom versions
+- `authenticate(member, signature, nonce)` - Authenticate with signed nonce
+- `logout(token)` - Revoke authentication token
+
+### `SequencerServiceClient`
+
+Client for sequencer operations (requires authentication).
+
+#### Methods
+
+- `connect(endpoint)` - Connect to a sequencer endpoint
+- `get_traffic_state(member, timestamp)` - Get traffic state for a member
+- `get_time()` - Get current sequencing time
+- `inner()` - Access inner gRPC client for advanced operations
 
 ### Protocol Version Constants
 
@@ -167,16 +248,16 @@ Ed25519 signing key for authentication.
 
 #### Methods
 
-- `generate() -> Self` - Generate a new random key pair
-- `from_secret_key(bytes: &[u8; 32]) -> Result<Self, SigningError>` - Create from secret key bytes
-- `sign_nonce(nonce: &[u8]) -> Signature` - Sign a nonce and return Canton-compatible Signature
-- `fingerprint() -> String` - Get hex-encoded SHA-256 fingerprint of public key
-- `participant_id(name: &str) -> Result<ParticipantId, MemberError>` - Create a ParticipantId
-- `mediator_id(name: &str) -> Result<MediatorId, MemberError>` - Create a MediatorId
-- `sequencer_id(name: &str) -> Result<SequencerId, MemberError>` - Create a SequencerId
-- `public_key_bytes() -> [u8; 32]` - Get raw public key bytes
-- `secret_key_bytes() -> [u8; 32]` - Get raw secret key bytes
-- `verify(message: &[u8], signature: &[u8; 64]) -> bool` - Verify a signature
+- `generate()` - Generate a new random key pair
+- `from_secret_key(bytes)` - Create from secret key bytes
+- `sign_nonce(nonce)` - Sign a nonce and return Canton-compatible Signature
+- `fingerprint()` - Get hex-encoded SHA-256 fingerprint of public key
+- `participant_id(name)` - Create a ParticipantId
+- `mediator_id(name)` - Create a MediatorId
+- `sequencer_id(name)` - Create a SequencerId
+- `public_key_bytes()` - Get raw public key bytes
+- `secret_key_bytes()` - Get raw secret key bytes
+- `verify(message, signature)` - Verify a signature
 
 ### Member Types
 
@@ -188,13 +269,12 @@ Ed25519 signing key for authentication.
 
 ### Other Types
 
+- `SynchronizerInfo` - Synchronizer ID and sequencer UID
+- `TrafficState` - Traffic control state for a member
 - `Signature` - Cryptographic signature with format, algorithm, and optional delegation
-- `SignatureFormat` - Enum for signature formats (Raw, DER, Concat, Symbolic)
-- `SigningAlgorithmSpec` - Enum for signing algorithms (Ed25519, ECDSA-SHA256, ECDSA-SHA384)
 - `AuthToken` - Authentication token with expiration time
+- `HandshakeRequest/Response` - Protocol handshake messages
 - `ChallengeRequest/Response` - Challenge flow messages
-- `AuthenticateRequest/Response` - Authentication flow messages
-- `LogoutRequest/Response` - Logout flow messages
 
 ## Building from Source
 

@@ -1,12 +1,15 @@
 // Copyright (c) 2026 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Example demonstrating basic usage of the Canton Sequencer Authentication Client.
+//! Example demonstrating full usage of the Canton Sequencer Clients.
 //!
 //! This example shows how to:
 //! 1. Generate an Ed25519 signing key
 //! 2. Create a Participant ID from the key
-//! 3. Connect to a sequencer and authenticate
+//! 3. Connect and perform handshake with SequencerConnectService
+//! 4. Get synchronizer info and parameters
+//! 5. Authenticate using SequencerAuthenticationService
+//! 6. Use SequencerService to get traffic state
 //!
 //! Usage:
 //! ```bash
@@ -14,7 +17,9 @@
 //! ```
 
 use canton_sequencer_client::{
-    member::Member, signing::Ed25519Signer, SequencerAuthClient, LATEST_STABLE_VERSION,
+    member::Member, signing::Ed25519Signer,
+    SequencerConnectClient, SequencerAuthClient, SequencerServiceClient,
+    LATEST_STABLE_VERSION,
 };
 use std::env;
 
@@ -47,18 +52,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  - Identifier: {}", participant_id.uid().identifier());
     println!("  - Namespace: {}", participant_id.uid().namespace());
 
-    // Step 3: Connect to the sequencer
-    println!("\n=== Connecting to Sequencer ===");
+    // Step 3: Connect and perform handshake
+    println!("\n=== SequencerConnectService ===");
     println!("Endpoint: {}", endpoint);
-    let mut client = SequencerAuthClient::connect(endpoint.clone()).await?;
+    let mut connect_client = SequencerConnectClient::connect(endpoint.clone()).await?;
     println!("Connected successfully!");
 
-    // Step 4: Request a challenge for our participant
-    // Uses LATEST_STABLE_VERSION (v34) by default
-    println!("\n=== Authentication Challenge ===");
+    // Perform protocol version handshake
+    println!("\n--- Handshake ---");
+    println!("Client protocol version: {}", LATEST_STABLE_VERSION);
+    match connect_client.handshake().await {
+        Ok(response) => {
+            println!("Server protocol version: {}", response.server_protocol_version);
+            match response.value {
+                Some(canton_sequencer_client::proto::sequencer::sequencer_connect::handshake_response::Value::Success(_)) => {
+                    println!("Handshake: SUCCESS");
+                }
+                Some(canton_sequencer_client::proto::sequencer::sequencer_connect::handshake_response::Value::Failure(f)) => {
+                    println!("Handshake: FAILED - {}", f.reason);
+                }
+                None => {
+                    println!("Handshake: No response value");
+                }
+            }
+        }
+        Err(e) => {
+            println!("Handshake failed: {}", e);
+        }
+    }
+
+    // Get synchronizer ID
+    println!("\n--- Synchronizer Info ---");
+    match connect_client.get_synchronizer_id().await {
+        Ok(info) => {
+            println!("Physical Synchronizer ID: {}", info.physical_synchronizer_id);
+            println!("Sequencer UID: {}", info.sequencer_uid);
+        }
+        Err(e) => {
+            println!("Failed to get synchronizer ID: {}", e);
+        }
+    }
+
+    // Verify active
+    println!("\n--- Verify Active ---");
+    match connect_client.verify_active().await {
+        Ok(response) => {
+            match response.value {
+                Some(canton_sequencer_client::proto::sequencer::sequencer_connect::verify_active_response::Value::Success(s)) => {
+                    println!("Sequencer active: {}", s.is_active);
+                }
+                Some(canton_sequencer_client::proto::sequencer::sequencer_connect::verify_active_response::Value::Failure(f)) => {
+                    println!("Verify active failed: {}", f.reason);
+                }
+                None => {
+                    println!("Verify active: No response");
+                }
+            }
+        }
+        Err(e) => {
+            println!("Failed to verify active: {}", e);
+        }
+    }
+
+    // Step 4: Authentication
+    println!("\n=== SequencerAuthenticationService ===");
+    let mut auth_client = SequencerAuthClient::connect(endpoint.clone()).await?;
+
+    // Request a challenge
+    println!("\n--- Challenge ---");
     println!("Requesting challenge for: {}", participant_id);
-    println!("Using protocol version: {} (latest stable)", LATEST_STABLE_VERSION);
-    let challenge = client.challenge(&participant_id).await?;
+    let challenge = auth_client.challenge(&participant_id).await?;
 
     println!("Nonce (hex): {}", hex_encode(&challenge.nonce));
     println!("Valid key fingerprints from sequencer:");
@@ -66,15 +129,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  - {}", fp);
     }
 
-    // Step 5: Sign the nonce
-    println!("\n=== Signing Challenge ===");
+    // Sign the nonce
+    println!("\n--- Sign Nonce ---");
     let signature = signer.sign_nonce(&challenge.nonce);
     println!("Signature created (64 bytes, Ed25519)");
     println!("Signed by fingerprint: {}", signature.signed_by);
 
-    // Step 6: Authenticate with the sequencer
-    println!("\n=== Authentication ===");
-    match client
+    // Authenticate
+    println!("\n--- Authenticate ---");
+    match auth_client
         .authenticate(&participant_id, signature, challenge.nonce)
         .await
     {
@@ -85,9 +148,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Expires at: {} seconds", expires_at.seconds);
             }
 
-            // Step 7: Logout
+            // Step 5: Use SequencerService
+            println!("\n=== SequencerService ===");
+            let mut service_client = SequencerServiceClient::connect(endpoint.clone()).await?;
+
+            // Get current time
+            println!("\n--- Get Time ---");
+            match service_client.get_time().await {
+                Ok(Some(time)) => {
+                    println!("Current sequencing time: {} microseconds", time);
+                }
+                Ok(None) => {
+                    println!("Sequencer is still initializing");
+                }
+                Err(e) => {
+                    println!("Failed to get time: {}", e);
+                }
+            }
+
+            // Get traffic state
+            println!("\n--- Get Traffic State ---");
+            match service_client.get_traffic_state(&participant_id, 0).await {
+                Ok(Some(state)) => {
+                    println!("Traffic state:");
+                    println!("  Extra traffic purchased: {}", state.extra_traffic_purchased);
+                    println!("  Extra traffic consumed: {}", state.extra_traffic_consumed);
+                    println!("  Base traffic remainder: {}", state.base_traffic_remainder);
+                }
+                Ok(None) => {
+                    println!("No traffic state available");
+                }
+                Err(e) => {
+                    println!("Failed to get traffic state: {}", e);
+                }
+            }
+
+            // Logout
             println!("\n=== Logout ===");
-            client.logout(token.token).await?;
+            auth_client.logout(token.token).await?;
             println!("Logged out successfully!");
         }
         Err(e) => {

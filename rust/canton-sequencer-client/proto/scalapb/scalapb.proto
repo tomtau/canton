@@ -1,0 +1,17 @@
+// Copyright (c) 2026 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+// Stub for scalapb options - not needed for Rust clients
+syntax = "proto3";
+
+package scalapb;
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.MessageOptions {
+  optional MessageOptions message = 1020;
+}
+
+message MessageOptions {
+  optional string companion_extends = 1;
+}

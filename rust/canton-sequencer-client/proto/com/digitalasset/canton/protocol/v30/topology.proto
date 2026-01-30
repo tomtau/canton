@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package com.digitalasset.canton.protocol.v30;
+
+import "com/digitalasset/canton/crypto/v30/crypto.proto";
+
+// Signed topology transaction - used in RegisterOnboardingTopologyTransactions
+message SignedTopologyTransaction {
+  // serialized topology transaction (protobuf bytestring)
+  bytes transaction = 1;
+
+  // multiple signatures
+  repeated com.digitalasset.canton.crypto.v30.Signature signatures = 2;
+  
+  // if true, this transaction is just a proposal
+  bool proposal = 3;
+}
